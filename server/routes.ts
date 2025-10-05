@@ -662,6 +662,296 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Add offline transaction
+  app.post("/api/offline-transactions", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const offlineTransaction = await storage.createOfflineTransaction({
+        userId: req.userId!,
+        type: req.body.type,
+        amount: req.body.amount,
+        description: req.body.description,
+        recipientDetails: req.body.recipientDetails,
+        metadata: req.body.metadata
+      });
+      res.status(201).json(offlineTransaction);
+
+    } catch (error) {
+      console.error("Create offline transaction error:", error);
+      res.status(500).json({ message: "Failed to create offline transaction" });
+    }
+  });
+
+  // Delete beneficiary
+  app.delete("/api/beneficiaries/:id", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const beneficiary = await storage.getBeneficiary(req.params.id);
+      if (!beneficiary || beneficiary.userId !== req.userId) {
+        return res.status(404).json({ message: "Beneficiary not found" });
+      }
+
+      await storage.deleteBeneficiary(req.params.id);
+      res.json({ message: "Beneficiary deleted successfully" });
+
+    } catch (error) {
+      console.error("Delete beneficiary error:", error);
+      res.status(500).json({ message: "Failed to delete beneficiary" });
+    }
+  });
+
+  // Get KYC documents
+  app.get("/api/kyc-documents", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const kycDocs = await storage.getKycDocuments(req.userId!);
+      res.json(kycDocs || {});
+
+    } catch (error) {
+      console.error("Get KYC documents error:", error);
+      res.status(500).json({ message: "Failed to get KYC documents" });
+    }
+  });
+
+  // Update KYC documents
+  app.post("/api/kyc-documents", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const existingKyc = await storage.getKycDocuments(req.userId!);
+      
+      if (existingKyc) {
+        const updatedKyc = await storage.updateKycDocuments(req.userId!, req.body);
+        res.json(updatedKyc);
+      } else {
+        const newKyc = await storage.createKycDocuments({
+          userId: req.userId!,
+          ...req.body
+        });
+        res.status(201).json(newKyc);
+      }
+
+    } catch (error) {
+      console.error("Update KYC documents error:", error);
+      res.status(500).json({ message: "Failed to update KYC documents" });
+    }
+  });
+
+  // Bill Payments - Airtime
+  app.post("/api/bills/airtime", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { phoneNumber, amount, network, pin } = req.body;
+
+      // Verify transaction PIN
+      const user = await storage.getUser(req.userId!);
+      if (!user || !user.transactionPin) {
+        return res.status(400).json({ message: "Transaction PIN not set" });
+      }
+
+      const isValidPin = await bcrypt.compare(pin, user.transactionPin);
+      if (!isValidPin) {
+        return res.status(401).json({ message: "Invalid transaction PIN" });
+      }
+
+      // Check wallet balance
+      const wallet = await storage.getWallet(req.userId!);
+      if (!wallet || parseFloat(wallet.balance || "0") < parseFloat(amount)) {
+        return res.status(400).json({ message: "Insufficient balance" });
+      }
+
+      // Generate transaction reference
+      const reference = `AIR_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // Create transaction record
+      const transaction = await storage.createTransaction({
+        userId: req.userId!,
+        type: 'airtime',
+        amount,
+        description: `${network} Airtime for ${phoneNumber}`,
+        reference,
+        status: 'success',
+        metadata: { phoneNumber, network }
+      });
+
+      // Deduct from wallet (in real app, would use Squad API)
+      const newBalance = (parseFloat(wallet.balance || "0") - parseFloat(amount)).toFixed(2);
+      await storage.updateWalletBalance(req.userId!, newBalance);
+
+      res.json({
+        message: "Airtime purchase successful",
+        transaction: {
+          id: transaction.id,
+          reference,
+          status: 'success'
+        }
+      });
+
+    } catch (error) {
+      console.error("Airtime purchase error:", error);
+      res.status(500).json({ message: "Airtime purchase failed" });
+    }
+  });
+
+  // Bill Payments - Data
+  app.post("/api/bills/data", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { phoneNumber, amount, network, plan, pin } = req.body;
+
+      // Verify transaction PIN
+      const user = await storage.getUser(req.userId!);
+      if (!user || !user.transactionPin) {
+        return res.status(400).json({ message: "Transaction PIN not set" });
+      }
+
+      const isValidPin = await bcrypt.compare(pin, user.transactionPin);
+      if (!isValidPin) {
+        return res.status(401).json({ message: "Invalid transaction PIN" });
+      }
+
+      // Check wallet balance
+      const wallet = await storage.getWallet(req.userId!);
+      if (!wallet || parseFloat(wallet.balance || "0") < parseFloat(amount)) {
+        return res.status(400).json({ message: "Insufficient balance" });
+      }
+
+      // Generate transaction reference
+      const reference = `DATA_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // Create transaction record
+      const transaction = await storage.createTransaction({
+        userId: req.userId!,
+        type: 'data',
+        amount,
+        description: `${network} Data - ${plan} for ${phoneNumber}`,
+        reference,
+        status: 'success',
+        metadata: { phoneNumber, network, plan }
+      });
+
+      // Deduct from wallet
+      const newBalance = (parseFloat(wallet.balance || "0") - parseFloat(amount)).toFixed(2);
+      await storage.updateWalletBalance(req.userId!, newBalance);
+
+      res.json({
+        message: "Data purchase successful",
+        transaction: {
+          id: transaction.id,
+          reference,
+          status: 'success'
+        }
+      });
+
+    } catch (error) {
+      console.error("Data purchase error:", error);
+      res.status(500).json({ message: "Data purchase failed" });
+    }
+  });
+
+  // Bill Payments - Electricity
+  app.post("/api/bills/electricity", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { meterNumber, amount, provider, meterType, pin } = req.body;
+
+      // Verify transaction PIN
+      const user = await storage.getUser(req.userId!);
+      if (!user || !user.transactionPin) {
+        return res.status(400).json({ message: "Transaction PIN not set" });
+      }
+
+      const isValidPin = await bcrypt.compare(pin, user.transactionPin);
+      if (!isValidPin) {
+        return res.status(401).json({ message: "Invalid transaction PIN" });
+      }
+
+      // Check wallet balance
+      const wallet = await storage.getWallet(req.userId!);
+      if (!wallet || parseFloat(wallet.balance || "0") < parseFloat(amount)) {
+        return res.status(400).json({ message: "Insufficient balance" });
+      }
+
+      // Generate transaction reference
+      const reference = `ELEC_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // Create transaction record
+      const transaction = await storage.createTransaction({
+        userId: req.userId!,
+        type: 'electricity',
+        amount,
+        description: `${provider} Electricity - ${meterNumber}`,
+        reference,
+        status: 'success',
+        metadata: { meterNumber, provider, meterType }
+      });
+
+      // Deduct from wallet
+      const newBalance = (parseFloat(wallet.balance || "0") - parseFloat(amount)).toFixed(2);
+      await storage.updateWalletBalance(req.userId!, newBalance);
+
+      res.json({
+        message: "Electricity bill payment successful",
+        transaction: {
+          id: transaction.id,
+          reference,
+          status: 'success'
+        }
+      });
+
+    } catch (error) {
+      console.error("Electricity payment error:", error);
+      res.status(500).json({ message: "Electricity payment failed" });
+    }
+  });
+
+  // Bill Payments - Cable TV
+  app.post("/api/bills/cable-tv", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const { smartCardNumber, amount, provider, plan, pin } = req.body;
+
+      // Verify transaction PIN
+      const user = await storage.getUser(req.userId!);
+      if (!user || !user.transactionPin) {
+        return res.status(400).json({ message: "Transaction PIN not set" });
+      }
+
+      const isValidPin = await bcrypt.compare(pin, user.transactionPin);
+      if (!isValidPin) {
+        return res.status(401).json({ message: "Invalid transaction PIN" });
+      }
+
+      // Check wallet balance
+      const wallet = await storage.getWallet(req.userId!);
+      if (!wallet || parseFloat(wallet.balance || "0") < parseFloat(amount)) {
+        return res.status(400).json({ message: "Insufficient balance" });
+      }
+
+      // Generate transaction reference
+      const reference = `CATV_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+      // Create transaction record
+      const transaction = await storage.createTransaction({
+        userId: req.userId!,
+        type: 'cable_tv',
+        amount,
+        description: `${provider} - ${plan}`,
+        reference,
+        status: 'success',
+        metadata: { smartCardNumber, provider, plan }
+      });
+
+      // Deduct from wallet
+      const newBalance = (parseFloat(wallet.balance || "0") - parseFloat(amount)).toFixed(2);
+      await storage.updateWalletBalance(req.userId!, newBalance);
+
+      res.json({
+        message: "Cable TV subscription successful",
+        transaction: {
+          id: transaction.id,
+          reference,
+          status: 'success'
+        }
+      });
+
+    } catch (error) {
+      console.error("Cable TV payment error:", error);
+      res.status(500).json({ message: "Cable TV payment failed" });
+    }
+  });
+
   const httpServer = createServer(app);
   return httpServer;
 }
