@@ -38,6 +38,10 @@ const requireAuth = (req: AuthRequest, res: Response, next: NextFunction) => {
 // Squad API helper functions
 const squadAPI = {
   async createVirtualAccount(customerData: any) {
+    if (!SQUAD_API_KEY) {
+      throw new Error("Squad API key not configured");
+    }
+    
     const response = await fetch(`${SQUAD_BASE_URL}/virtual-account`, {
       method: 'POST',
       headers: {
@@ -45,7 +49,7 @@ const squadAPI = {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        customer_identifier: customerData.phone.slice(-10), // Last 10 digits
+        customer_identifier: customerData.phone.slice(-10),
         first_name: customerData.firstName,
         last_name: customerData.lastName,
         mobile_num: customerData.phone,
@@ -54,28 +58,58 @@ const squadAPI = {
         beneficiary_account: customerData.phone.slice(-10)
       })
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Squad API error: ${response.status} - ${errorText}`);
+    }
+    
     return response.json();
   },
 
   async getBanks() {
+    if (!SQUAD_API_KEY) {
+      throw new Error("Squad API key not configured");
+    }
+    
     const response = await fetch(`${SQUAD_BASE_URL}/banks`, {
       headers: {
         'Authorization': `Bearer ${SQUAD_API_KEY}`
       }
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Squad API error: ${response.status} - ${errorText}`);
+    }
+    
     return response.json();
   },
 
   async verifyAccountNumber(bankCode: string, accountNumber: string) {
+    if (!SQUAD_API_KEY) {
+      throw new Error("Squad API key not configured");
+    }
+    
     const response = await fetch(`${SQUAD_BASE_URL}/account-lookup?bank_code=${bankCode}&account_number=${accountNumber}`, {
       headers: {
         'Authorization': `Bearer ${SQUAD_API_KEY}`
       }
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Squad API error: ${response.status} - ${errorText}`);
+    }
+    
     return response.json();
   },
 
   async initiateTransfer(transferData: any) {
+    if (!SQUAD_API_KEY) {
+      throw new Error("Squad API key not configured");
+    }
+    
     const response = await fetch(`${SQUAD_BASE_URL}/transaction`, {
       method: 'POST',
       headers: {
@@ -84,6 +118,12 @@ const squadAPI = {
       },
       body: JSON.stringify(transferData)
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Squad API error: ${response.status} - ${errorText}`);
+    }
+    
     return response.json();
   }
 };
